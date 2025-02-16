@@ -1,4 +1,11 @@
-# Project template
+# Project 
+
+
+## Install
+
+```bash
+mamba create -n buart2025 -c bioconda -c nvidia -c pytorch -c pyg python=3.11 cuda-version=12.4 pytorch torchvision torchaudio pytorch-cuda=12.4 snakemake graph-tool scikit-learn numpy numba scipy pandas polars networkx seaborn matplotlib gensim ipykernel tqdm black faiss-gpu pyg  python-igraph gputil snakefmt -y
+```
 
 A simple template for research project repos. Also check out [data science and
 reproducible science cookie

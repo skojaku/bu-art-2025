@@ -3,51 +3,49 @@ from os.path import join as j
 configfile: "workflow/config.yaml"
 
 # Import utilities
-include: "../workflow_utils.smk"
-include: "workflow_utils.smk"
-
-#EMB_DIR = j(DATA_DIR, "{data}", "embeddings")
-#emb_params ={
-#    "directed": ["undirected", "directed"],
-#    "window_length": [10],
-#    "model_name": ["node2vec", "deepwalk", "adjspec", "leigenmap"],
-#    "dim": [64],
-#}
-#emb_params2 ={
-#    "directed": ["undirected", "directed"],
-#    "window_length": [10],
-#    "model_name": ["node2vec", "deepwalk", "adjspec", "leigenmap"],
-#    "dim": [64],
-#}
-#emb_paramspace = to_union_paramspace([emb_params, emb_param2])
-#EMB_FILE = j(EMB_DIR, f"paper_{emb_paramspace.wildcard_pattern}.npz")
-
+include: "workflow/workflow_utils.smk"
 
 DATA_DIR = config["data_dir"]
 
+# GPU Configuration
+GPUS = list(range(4))  # [0, 1, 2, 3]
+
+# Input files ------------------------------------------------------------------
+PREPROCESSED_DATA_DIR = j(DATA_DIR, "preprocessed")
+PAPER_TABLE_FILE = j(PREPROCESSED_DATA_DIR, "paper_table.csv")
+AUTHOR_TABLE_FILE = j(PREPROCESSED_DATA_DIR, "author_table.csv")
+AUTHOR_PAPER_TABLE_FILE = j(PREPROCESSED_DATA_DIR, "author_paper_table.csv")
+PAPER_CONCEPT_TABLE_FILE = j(PREPROCESSED_DATA_DIR, "paper_concept_table.csv")
+
+# Intermediate files ----------------------------------------------------------
+INTERMEDIATE_EMB_DIR = j(DATA_DIR, "derived", "embeddings", "intermediate")
+BASE_EMB_FILE = j(DATA_DIR, "derived", "embeddings", "base_paper_embeddings.npz")
+
+# Output files -----------------------------------------------------------------
 PAPER_DIR = config["paper_dir"]
 PAPER_SRC, SUPP_SRC = [j(PAPER_DIR, f) for f in ("main.tex", "supp.tex")]
 PAPER, SUPP = [j(PAPER_DIR, f) for f in ("main.pdf", "supp.pdf")]
 
 rule all:
     input:
-        PAPER, SUPP
+        BASE_EMB_FILE
 
-rule paper:
+rule generate_partial_embeddings:
     input:
-        PAPER_SRC, SUPP_SRC
-    params:
-        paper_dir = PAPER_DIR
+        input_file = PAPER_TABLE_FILE
     output:
-        PAPER, SUPP
-    shell:
-        "cd {params.paper_dir}; make"
+        output_file = temp(j(INTERMEDIATE_EMB_DIR, "partial_embeddings_{gpu_id}.npz"))
+    params:
+        instruction = "Represent the Science title.",
+        batch_size = 512,
+        device = lambda wildcards: f"cuda:{wildcards.gpu_id}"
+    script:
+        "workflow/instructor-embedding.py"
 
-
-# rule some_data_processing:
-    # input:
-        # "data/some_data.csv"
-    # output:
-        # "data/derived/some_derived_data.csv"
-    # script:
-        # "workflow/scripts/process_some_data.py"
+rule combine_embeddings:
+    input:
+        partial_embeddings = expand(j(INTERMEDIATE_EMB_DIR, "partial_embeddings_{gpu_id}.npz"), gpu_id=GPUS)
+    output:
+        output_file = protected(BASE_EMB_FILE)
+    script:
+        "workflow/combine-embeddings.py"

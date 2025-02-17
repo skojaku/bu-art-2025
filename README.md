@@ -1,10 +1,10 @@
-# Project 
+# Project
 
 
 ## Install
 
 ```bash
-mamba create -n buart2025 -c bioconda -c nvidia -c pytorch -c pyg python=3.11 cuda-version=12.4 pytorch torchvision torchaudio pytorch-cuda=12.4 snakemake graph-tool scikit-learn numpy numba scipy pandas polars networkx seaborn matplotlib gensim ipykernel tqdm black faiss-gpu pyg  python-igraph gputil snakefmt -y
+mamba create -n buart2025 -c bioconda -c nvidia -c pytorch -c pyg -c conda-forge python=3.11 cuda-version=12.4 pytorch torchvision torchaudio pytorch-cuda=12.4 snakemake graph-tool scikit-learn numpy numba scipy pandas polars networkx seaborn matplotlib gensim ipykernel tqdm black faiss-gpu pyg python-igraph gputil snakefmt huggingface_hub=0.16.4 sentence-transformers=2.2.2 InstructorEmbedding=1.0.1 -y
 ```
 
 A simple template for research project repos. Also check out [data science and
@@ -17,7 +17,7 @@ Run the following
 
     ./install.sh YOUR_PROJECT_REPO_FOLDER
 
-This script creates the following folders and files. 
+This script creates the following folders and files.
 
 1. `libs` for a software library for the project.
 1. `data` for datasets and scripts for downloading datasets.
@@ -36,14 +36,14 @@ This script creates the following folders and files.
 Miniforge is preferred over conda because Miniforge comes with mamba and conda-forge is the default channel.
 
 
-### Setting up the virtual environment 
+### Setting up the virtual environment
 
 First create a virtual environment for the project.
 
     mamba create -n project_env_name python=3.7
     mamba activate project_env_name
 
-Install `ipykernel` for Jupyter and `snakemake` for workflow management. 
+Install `ipykernel` for Jupyter and `snakemake` for workflow management.
 
     mamba install -y -c bioconda -c conda-forge snakemake ipykernel numpy pandas scipy matplotlib seaborn tqdm austin
 
@@ -60,10 +60,10 @@ pre-commit install
 ```
 
 
-### Snakemake setting 
+### Snakemake setting
 
-```bash 
-mkdir -p ~/.config/snakemake/default 
+```bash
+mkdir -p ~/.config/snakemake/default
 ```
 and create `~/.config/snakemake/default/config.yaml`:
 ```yaml
@@ -73,6 +73,6 @@ rerun-triggers: mtime
 ```
 
 and add the following to .zshrc or .bashrc file
-```bash 
+```bash
 export SNAKEMAKE_PROFILE=default
 ```

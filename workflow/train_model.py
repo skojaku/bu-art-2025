@@ -15,14 +15,10 @@ from typing import Optional, Tuple, List
 import os
 import sys
 
-@dataclass
-class Config:
-    """Configuration parameters"""
-    embedding_dim: int = 2  # Embedding dimension (not including time dimension)
-    batch_size: int = 1024
-    epochs: int = 1000
-    learning_rate: float = 1e-3
-    validation_split: float = 0.05
+if "snakemake" in sys.modules:
+    from model import LorentzModel, Config
+else:
+    from workflow.model import LorentzModel, Config
 
 
 class TrajectoryDataset(Dataset):
@@ -73,83 +69,6 @@ class TrajectoryDataset(Dataset):
             'weight': self.pair_weights[idx]
         }
 
-
-class LorentzModel(pl.LightningModule):
-    """Lorentz embedding model using PyTorch Lightning."""
-
-    def __init__(self, input_dim: int, config: Config, model_file: str):
-        super().__init__()
-        self.save_hyperparameters()
-        self.config = config
-        self.input_dim = input_dim
-        self.model_file = model_file
-
-        # Initialize manifold
-        self.manifold = geoopt.Lorentz()
-
-        # Add projection layer from input embeddings to Lorentz space
-        self.projection = torch.nn.Linear(input_dim, config.embedding_dim + 1)
-
-        # Add layer normalization
-        self.layer_norm = torch.nn.LayerNorm(config.embedding_dim + 1)
-
-        # Add this line to track best loss
-        self.best_loss = float('inf')
-
-    def forward(self, x):
-        # Project input embeddings to Lorentz space
-        projected = self.projection(x)
-        # Apply layer normalization
-        normalized = self.layer_norm(projected)
-        # Project onto manifold
-        return self.manifold.projx(normalized)
-
-    def compute_loss(self, batch):
-        # Get embeddings
-        src_emb = self(batch['src'])
-        trg_emb = self(batch['trg'])
-        neg_emb = self(batch['neg'])
-
-        # Compute distances
-        pos_dist = self.manifold.dist(src_emb, trg_emb)
-        neg_dist = self.manifold.dist(src_emb, neg_emb)
-
-        # Compute loss
-        margin = 1.0
-        loss = torch.mean(batch['weight'] * torch.relu(margin + pos_dist - neg_dist))
-        return loss
-
-    def training_step(self, batch, batch_idx):
-        loss = self.compute_loss(batch)
-
-        # Enhanced logging with sync_dist=True
-        self.log('train_loss', loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
-
-        # Track best loss
-        if loss < self.best_loss:
-            self.best_loss = loss
-            self.log('best_loss', self.best_loss, prog_bar=True, sync_dist=True)
-
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        loss = self.compute_loss(batch)
-        self.log('val_loss', loss, prog_bar=True, on_epoch=True, sync_dist=True)
-        return loss
-
-    def configure_optimizers(self):
-        return geoopt.optim.RiemannianAdam(
-            self.parameters(),
-            lr=self.config.learning_rate,
-            stabilize=10
-        )
-
-    def on_train_end(self):
-        self.save_model()
-
-    def save_model(self):
-        """Save the model state dict."""
-        torch.save(self.state_dict(), self.hparams.model_file)
 
 
 def get_paper_sequences(author2paper: sparse.csr_matrix, paper_years: np.ndarray, n_epochs: int) -> Tuple[List[List[int]], List[float]]:

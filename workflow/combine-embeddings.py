@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def combine_partial_embeddings(input_files, output_file):
     """
     Combine partial embeddings from multiple GPUs into a single file.
@@ -16,12 +17,12 @@ def combine_partial_embeddings(input_files, output_file):
     # Load and combine all partial embeddings
     for file in input_files:
         data = np.load(file)
-        all_embeddings.append(data['embeddings'])
-        all_paper_ids.append(data['paper_ids'])
+        all_embeddings.append(data["embeddings"])
+        all_paper_ids.append(data["paper_ids"])
 
         # Get instruction (should be the same for all files)
         if instruction is None:
-            instruction = str(data['instruction'])
+            instruction = str(data["instruction"])
 
     # Combine arrays
     paper_ids = np.concatenate(all_paper_ids)
@@ -34,11 +35,9 @@ def combine_partial_embeddings(input_files, output_file):
 
     # Save combined data
     np.savez_compressed(
-        output_file,
-        embeddings=embeddings,
-        paper_ids=paper_ids,
-        instruction=instruction
+        output_file, embeddings=embeddings, paper_ids=paper_ids, instruction=instruction
     )
+
 
 # Get input and output files from snakemake
 input_files = snakemake.input.partial_embeddings

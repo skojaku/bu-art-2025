@@ -89,3 +89,13 @@ rule train_model:
         model_file = EMB_MODEL_FILE
     script:
         "workflow/train_model.py"
+
+rule generate_lorenz_embedding:
+    input:
+        paper_table_file = PAPER_TABLE_FILE,
+        base_embedding_file = BASE_EMB_FILE,
+        model_file = EMB_MODEL_FILE
+    output:
+        output_file = EMB_EMBEDDING_FILE
+    script:
+        "workflow/generate-lorenz-embedding.py"

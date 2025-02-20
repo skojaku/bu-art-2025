@@ -4,7 +4,10 @@ from InstructorEmbedding.instructor import INSTRUCTOR
 import torch
 from snakemake.shell import shell
 
-def generate_embeddings(input_file, output_file, instruction, batch_size=512, device=None):
+
+def generate_embeddings(
+    input_file, output_file, instruction, batch_size=512, device=None
+):
     """
     Generate embeddings for a subset of paper titles using the Instructor model.
 
@@ -16,7 +19,7 @@ def generate_embeddings(input_file, output_file, instruction, batch_size=512, de
         device (str): Device to use for computation (e.g., 'cuda:0', 'cuda:1', etc.)
     """
     # Extract GPU ID from device string
-    gpu_id = int(device.split(':')[1]) if 'cuda' in device else None
+    gpu_id = int(device.split(":")[1]) if "cuda" in device else None
 
     # Load paper data
     print(f"Loading paper data from {input_file}")
@@ -24,13 +27,13 @@ def generate_embeddings(input_file, output_file, instruction, batch_size=512, de
 
     # Filter papers for this GPU based on paper_id modulus
     if gpu_id is not None:
-        n_gpus = len(snakemake.config.get('GPUS', [0, 1, 2, 3]))
+        n_gpus = len(snakemake.config.get("GPUS", [0, 1, 2, 3]))
         paper_table = paper_table[paper_table.index % n_gpus == gpu_id].copy()
         print(f"Processing {len(paper_table)} papers on GPU {gpu_id}")
 
     # Initialize the model
     print(f"Initializing INSTRUCTOR model on {device}")
-    model = INSTRUCTOR('hkunlp/instructor-large', device=device)
+    model = INSTRUCTOR("hkunlp/instructor-large", device=device)
 
     # Prepare titles
     titles = paper_table["title"].values
@@ -48,7 +51,7 @@ def generate_embeddings(input_file, output_file, instruction, batch_size=512, de
         batch_size=batch_size,
         show_progress_bar=True,
         device=device,
-        normalize_embeddings=True
+        normalize_embeddings=True,
     )
 
     # Set embeddings for missing titles to 0
@@ -57,14 +60,12 @@ def generate_embeddings(input_file, output_file, instruction, batch_size=512, de
     # Save embeddings with paper IDs
     print(f"Saving embeddings to {output_file}")
     np.savez_compressed(
-        output_file,
-        embeddings=embeddings,
-        paper_ids=paper_ids,
-        instruction=instruction
+        output_file, embeddings=embeddings, paper_ids=paper_ids, instruction=instruction
     )
 
     print("Done!")
     return embeddings
+
 
 # Get input and output files from snakemake
 input_file = snakemake.input["input_file"]
@@ -81,5 +82,5 @@ generate_embeddings(
     output_file=output_file,
     instruction=instruction,
     batch_size=batch_size,
-    device=device
+    device=device,
 )

@@ -1,0 +1,10 @@
+config: !!python/object:workflow.model.Config
+  batch_size: 1024
+  dropout_rate: 0.2
+  embedding_dim: 2
+  epochs: 60
+  learning_rate: 0.0001
+  margin: 1.0
+  validation_split: 0.05
+input_dim: 768
+model_file: ./data/derived/embeddings/model.pt

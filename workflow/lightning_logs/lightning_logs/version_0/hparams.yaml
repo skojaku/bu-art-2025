@@ -1,0 +1,11 @@
+config: !!python/object:__main__.Config
+  batch_size: 64
+  embedding_dim: 2
+  end_train_year: 2023
+  epochs: 100
+  learning_rate: 0.001
+  min_text_len: 10
+  n_test_samples: 5000
+embedding_file: embeddings/lorentz-00-0.00.npz
+model_file: checkpoints/lorentz-00-0.00.pt
+num_papers: 2544738

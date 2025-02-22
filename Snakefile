@@ -44,6 +44,16 @@ rule all:
         EMB_EMBEDDING_FILE
         #BASE_EMB_FILE
 
+rule generate_raw_data:
+    output:
+        raw_paper_table_file = RAW_PAPER_TABLE_FILE,
+        raw_author_table_file = RAW_AUTHOR_TABLE_FILE,
+        raw_author_paper_table_file = RAW_AUTHOR_PAPER_TABLE_FILE,
+        raw_paper_concept_table_file = RAW_PAPER_CONCEPT_TABLE_FILE,
+        raw_concept_table_file = RAW_CONCEPT_TABLE_FILE
+    script:
+        "workflow/generate-raw-data.py"
+
 rule preprocess_data:
     input:
         raw_paper_table_file = RAW_PAPER_TABLE_FILE,

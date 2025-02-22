@@ -12,8 +12,8 @@ from scipy import sparse
 paper_table = pd.read_csv("../../data/preprocessed/paper_table.csv")
 paper_concept_table = pd.read_csv("../../data/preprocessed/paper_concept_table.csv")
 concept_table = pd.read_csv("../../data/preprocessed/concept_table.csv")
-#data = np.load("../../data/derived/embeddings/embeddings-2025-0220.npz")
-data = np.load("../../data/derived/embeddings/embeddings.npz")
+data = np.load("../../data/derived/embeddings/embeddings-2025-0220.npz")
+#data = np.load("../../data/derived/embeddings/embeddings.npz")
 paper_author_table = pd.read_csv("../../data/preprocessed/author_paper_table.csv")
 concept_table = pd.read_csv("../../data/preprocessed/concept_table.csv")
 paper_ids = data["paper_ids"]
@@ -263,8 +263,8 @@ def plot_canvas(ax):
         degrees = int(np.degrees(angle))
 
     # Add x and y axis lines that stop at circle boundary
-    ax.plot([-1, 1], [0, 0], color="gray", alpha=0.9, linestyle="-", linewidth=1.0)
-    ax.plot([0, 0], [-1, 1], color="gray", alpha=0.9, linestyle="-", linewidth=1.0)
+    #ax.plot([-1, 1], [0, 0], color="gray", alpha=0.9, linestyle=":", linewidth=0.7)
+    #ax.plot([0, 0], [-1, 1], color="gray", alpha=0.9, linestyle=":", linewidth=0.7)
     return ax
 
 
@@ -273,7 +273,7 @@ def plot_density(ax, xy, point_densities, **contourf_kwargs):
     grid_size = int(np.sqrt(len(xy)))
     x = xy[:, 0].reshape(grid_size, grid_size)
     y = xy[:, 1].reshape(grid_size, grid_size)
-    mask = x**2 + y**2 > 1.0
+    mask = x**2 + y**2 >= 1.0  # Changed > to >= to include boundary
 
     # Convert point_densities to numpy array if it's a tensor
     if torch.is_tensor(point_densities):
@@ -285,9 +285,9 @@ def plot_density(ax, xy, point_densities, **contourf_kwargs):
     # Mask the density values
     masked_densities = np.ma.masked_array(density_grid, mask=mask)
 
-    # Create the contour plot
+    # Create the contour plot with exact boundary
     contour = ax.contourf(
-        x, y, masked_densities, levels=100, antialiased=True, **contourf_kwargs
+        x, y, masked_densities, levels=100, antialiased=True, extent=[-1, 1, -1, 1], **contourf_kwargs
     )
 
     # Add dark overlay
@@ -497,16 +497,17 @@ def plot_papers(ax, xy, top_concepts, paper_table_extended):
         )
 
 
-#    ax.legend(
-#        bbox_to_anchor=(1.05, 1),
-#        loc="upper left",
-#        fontsize=12,  # Increase font size
-#        labelspacing=1.2,  # Increase spacing between labels
-#        markerscale=50,  # Scale up legend marker size
-#        handletextpad=1.5,  # Space between marker and text
-#        borderpad=1,  # Padding inside the legend box
-#    )
-    ax.legend().remove()
+    ax.legend(
+        bbox_to_anchor=(0.5, -0.1),
+        loc="upper center",
+        fontsize=15,  # Increase font size
+        labelspacing=1.2,  # Increase spacing between labels
+        markerscale=30,  # Scale up legend marker size
+        handletextpad=1.5,  # Space between marker and text
+        borderpad=1,  # Padding inside the legend box
+        ncol=4,  # Arrange legend items horizontally
+    )
+    #ax.legend().remove()
     ax.axis("off")
 
 ##  Potential difference in density --------------------------------------------
@@ -586,11 +587,11 @@ plot_density(
     vmax=max(abs(torch.min(potential_diff)), abs(torch.max(potential_diff))),
 )
 plot_canvas(ax)
+#plot_arrows(ax, focal_points_on_poincare_disk, potential_diff)
 circle = plt.Circle((0, 0), 1, color="black", alpha=0.3)
 ax.add_artist(circle)
-plot_arrows(ax, focal_points_on_poincare_disk, potential_diff)
 plot_papers(ax, xy_query, top_concepts, paper_table_extended)
-#fig.savefig("lorenz-embedding-potential-diff.png", dpi=500)
+fig.savefig("lorenz-embedding-potential-diff.png", dpi=500, bbox_inches='tight')
 # %%
 
 

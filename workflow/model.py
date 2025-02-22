@@ -16,7 +16,7 @@ class Config:
     embedding_dim: int = 2  # Embedding dimension (not including time dimension)
     batch_size: int = 1024
     epochs: int = 60
-    learning_rate: float = 1e-4
+    learning_rate: float = 1e-3
     validation_split: float = 0.05
     dropout_rate: float = 0.2  # 0 means no dropout
     margin: float = 1.0  # Hyperparameter for margin
@@ -37,6 +37,19 @@ class RiemannianLayerNorm(torch.nn.Module):
 
         # Move back to Lorentz hyperboloid
         return self.manifold.expmap0(tangent_x)
+
+
+class LorentzProjection(torch.nn.Module):
+    """Module to project vectors onto Lorentz manifold"""
+    def __init__(self, manifold, dim=None):
+        super().__init__()
+        self.manifold = manifold
+        self.dim = dim
+
+    def forward(self, x):
+        if self.dim is None:
+            return self.manifold.projx(x)
+        return self.manifold.projx(x, dim=self.dim)
 
 
 class LorentzModel(pl.LightningModule):
@@ -60,8 +73,10 @@ class LorentzModel(pl.LightningModule):
             torch.nn.Dropout(config.dropout_rate),
             torch.nn.Linear(input_dim // 2, input_dim // 4),
             torch.nn.LeakyReLU(),
-            torch.nn.Dropout(config.dropout_rate),
             torch.nn.Linear(input_dim // 4, config.embedding_dim + 1),
+            LorentzProjection(self.manifold),
+            #torch.nn.Linear(6, config.embedding_dim + 1),
+            #LorentzProjection(self.manifold)
         )
 
         self.projection_key = torch.nn.Sequential(
@@ -70,15 +85,17 @@ class LorentzModel(pl.LightningModule):
             torch.nn.Dropout(config.dropout_rate),
             torch.nn.Linear(input_dim // 2, input_dim // 4),
             torch.nn.LeakyReLU(),
-            torch.nn.Dropout(config.dropout_rate),
             torch.nn.Linear(input_dim // 4, config.embedding_dim + 1),
+            LorentzProjection(self.manifold),
+            #torch.nn.Linear(6, config.embedding_dim + 1),
+            #LorentzProjection(self.manifold)
         )
 
         # Initialize weights using Xavier initialization with small values
         for layer in self.projection_query:
             if isinstance(layer, torch.nn.Linear):
                 torch.nn.init.xavier_uniform_(
-                    layer.weight, gain=1.0
+                    layer.weight, gain=0.5
                     #layer.weight, gain=0.3
                 )  # Reduced gain for smaller weights
                 torch.nn.init.zeros_(layer.bias)
@@ -86,7 +103,7 @@ class LorentzModel(pl.LightningModule):
         for layer in self.projection_key:
             if isinstance(layer, torch.nn.Linear):
                 torch.nn.init.xavier_uniform_(
-                    layer.weight, gain=1.0
+                    layer.weight, gain=0.5
                 )  # Reduced gain for smaller weights
                 torch.nn.init.zeros_(layer.bias)
 
@@ -97,12 +114,10 @@ class LorentzModel(pl.LightningModule):
         return self.forward_query(x)
 
     def forward_query(self, x):
-        projected = self.projection_query(x)
-        return self.manifold.projx(projected)
+        return self.projection_query(x)
 
     def forward_key(self, x):
-        projected = self.projection_key(x)
-        return self.manifold.projx(projected)
+        return self.projection_key(x)
 
     def compute_loss(self, batch):
         # Get embeddings
@@ -115,20 +130,20 @@ class LorentzModel(pl.LightningModule):
         neg_dist = self.manifold.dist(src_emb, neg_emb)
 
         # Compute binary cross entropy loss
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            -pos_dist, torch.ones_like(pos_dist), weight=batch["weight"], reduction="sum"
-        )
-        loss += torch.nn.functional.binary_cross_entropy_with_logits(
-            -neg_dist,
-            torch.zeros_like(neg_dist),
-            weight=batch["weight"],
-            reduction="sum",
-        )
-        loss /= 2 * len(pos_dist)
+#        loss = torch.nn.functional.binary_cross_entropy_with_logits(
+#            -pos_dist, torch.ones_like(pos_dist), weight=batch["weight"], reduction="sum"
+#        )
+#        loss += torch.nn.functional.binary_cross_entropy_with_logits(
+#            -neg_dist,
+#            torch.zeros_like(neg_dist),
+#            weight=batch["weight"],
+#            reduction="sum",
+#        )
+#        loss /= 2 * len(pos_dist)
 
         # Triplet loss
-        # triplet_loss = torch.clamp(pos_dist - neg_dist + self.config.margin, min=0.0)
-        # loss = torch.mean(batch['weight'] * triplet_loss)
+        triplet_loss = torch.clamp(pos_dist - neg_dist + self.config.margin, min=0.0)
+        loss = torch.mean(batch['weight'] * triplet_loss)
 
         # Weight and combine the losses
         # loss = torch.mean(batch['weight'] * (pos_loss + neg_loss))
@@ -148,7 +163,7 @@ class LorentzModel(pl.LightningModule):
         loss = self.compute_loss(batch)
 
         # Apply gradient clipping to stabilize training
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
+        #torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
 
         # Enhanced logging with sync_dist=True
         self.log(
@@ -179,7 +194,7 @@ class LorentzModel(pl.LightningModule):
             stabilize=10,
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5, verbose=True
+            optimizer, mode="min", factor=0.2, patience=10, verbose=True
         )
         return {
             "optimizer": optimizer,

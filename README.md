@@ -92,7 +92,7 @@ $$
 \end{aligned}
 $$
 
-where $x$ is a point in the hyperbolic space. The `in-potential` $\phi_{\text{in}}(x)$ represents the sum of the probabilities of all papers in the space. The gradient of the in-potential encodes the direction of the net flow of papers towards $x$.
+where $x$ is a point in the hyperbolic space. The `in-potential` $\phi_{\text{in}}(x)$ represents the sum of the probabilities of all papers in the space. The gradient of the in-potential encodes the direction of the net flow of authors towards $x$.
 
 $$
 \nabla \phi_{\text{in}}(x) = \sum_{v_q} P(v_q) \exp(-d_L(v_q, x)) \nabla d_L(v_q, x)

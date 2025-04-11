@@ -7,6 +7,15 @@ include: "workflow/workflow_utils.smk"
 
 DATA_DIR = config["data_dir"]
 
+import json
+
+with open("northeast_university_openalex_ids.json", "r") as f:
+    INSTITUTION_IDS = json.load(f)
+
+INSTITUTION_IDS = list(INSTITUTION_IDS.values())
+print(INSTITUTION_IDS)
+
+
 # GPU Configuration
 GPUS = list(range(4))  # [0, 1, 2, 3]
 
@@ -18,7 +27,6 @@ RAW_PAPER_TABLE_FILE = j(RAW_DATA_DIR, "paper_table.csv")
 RAW_AUTHOR_TABLE_FILE = j(RAW_DATA_DIR, "author_table.csv")
 RAW_AUTHOR_PAPER_TABLE_FILE = j(RAW_DATA_DIR, "author_paper_table.csv")
 RAW_PAPER_CONCEPT_TABLE_FILE = j(RAW_DATA_DIR, "paper_concept_table.csv")
-RAW_CONCEPT_TABLE_FILE = j(RAW_DATA_DIR, "concept_table.csv")
 RAW_CONCEPT_TABLE_FILE = j(RAW_DATA_DIR, "concept_table.csv")
 
 PAPER_TABLE_FILE = j(PREPROCESSED_DATA_DIR, "paper_table.csv")
@@ -51,6 +59,8 @@ rule generate_raw_data:
         raw_author_paper_table_file = RAW_AUTHOR_PAPER_TABLE_FILE,
         raw_paper_concept_table_file = RAW_PAPER_CONCEPT_TABLE_FILE,
         raw_concept_table_file = RAW_CONCEPT_TABLE_FILE
+    params:
+        institution_ids = INSTITUTION_IDS
     script:
         "workflow/generate-raw-data.py"
 

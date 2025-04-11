@@ -9,13 +9,17 @@ from tqdm import tqdm
 from scipy import sparse
 
 # %% Loading data -------------------------------------------------------------
-paper_table = pd.read_csv("../../data/preprocessed/paper_table.csv")
-paper_concept_table = pd.read_csv("../../data/preprocessed/paper_concept_table.csv")
-concept_table = pd.read_csv("../../data/preprocessed/concept_table.csv")
-data = np.load("../../data/derived/embeddings/embeddings-2025-0220.npz")
+
+root_dir = "/data/projects/bu-art-2025/data-bu"
+paper_table = pd.read_csv(f"{root_dir}/preprocessed/paper_table.csv")
+paper_concept_table = pd.read_csv(f"{root_dir}/preprocessed/paper_concept_table.csv")
+concept_table = pd.read_csv(f"{root_dir}/preprocessed/concept_table.csv")
+#data = np.load(f"{root_dir}/derived/embeddings/embedding-checkpoint.npz")
+data = np.load(f"{root_dir}/derived/embeddings/embeddings.npz")
+
 #data = np.load("../../data/derived/embeddings/embeddings.npz")
-paper_author_table = pd.read_csv("../../data/preprocessed/author_paper_table.csv")
-concept_table = pd.read_csv("../../data/preprocessed/concept_table.csv")
+paper_author_table = pd.read_csv(f"{root_dir}/preprocessed/author_paper_table.csv")
+concept_table = pd.read_csv(f"{root_dir}/preprocessed/concept_table.csv")
 paper_ids = data["paper_ids"]
 embeddings_query = data["embeddings_query"].astype(np.float32)
 embeddings_key = data["embeddings_key"].astype(np.float32)
@@ -86,19 +90,23 @@ def compute_density_grid(
     grid_size=40,
     r=1.2,
     sigma=1.0,
-    batch_size=1000,
+    n_samples=100000,  # Number of random samples to use for density estimation
 ):
-    """Compute density values on a grid in the Poincaré disk.
+    """Compute density values on a grid in the Poincaré disk using random sampling.
 
     Args:
-        embeddings: Numpy array of embeddings
+        embeddings_query: Query embeddings tensor
+        embeddings_key: Key embeddings tensor
         weight_papers: Weights for each embedding point
         grid_size: Number of grid points in each dimension
         r: Radius of the grid in the Poincaré disk
         sigma: Bandwidth parameter for density estimation
+        n_samples: Number of random samples to use for density estimation
 
     Returns:
-        Numpy array of density values on the grid
+        Tuple containing:
+        - focal_points_on_poincare_disk: Grid points in Poincaré disk
+        - densities: Density values for each grid point
     """
     # Create grid of points in Poincaré disk
     focal_points_on_poincare_disk = torch.tensor(
@@ -110,7 +118,7 @@ def compute_density_grid(
                 .T
             ]
         ),
-        dtype=torch.float64,
+        dtype=torch.float32,
     )
 
     # Convert points to Lorentz model
@@ -118,43 +126,62 @@ def compute_density_grid(
         focal_points_on_poincare_disk
     )
 
-    # Compute densities
-    n = len(focal_points_on_lorentz_manifold)
-    densities = torch.zeros(n, 2, dtype=torch.float64)
+    # Initialize densities
+    n_grid = len(focal_points_on_lorentz_manifold)
+    densities = torch.zeros(n_grid, 2, dtype=torch.float32)
+
+    # Convert embeddings to float32 if they aren't already
+    embeddings_query = embeddings_query.to(dtype=torch.float32)
+    embeddings_key = embeddings_key.to(dtype=torch.float32)
+    weight_papers = torch.tensor(weight_papers, dtype=torch.float32)
+
+    # Randomly sample points for density estimation
+    n_total = len(embeddings_query)
+    if n_samples < n_total:
+        indices = torch.randperm(n_total)[:n_samples]
+        embeddings_query_sample = embeddings_query[indices]
+        embeddings_key_sample = embeddings_key[indices]
+        weight_papers_sample = weight_papers[indices]
+        # Adjust weights to account for sampling
+        weight_papers_sample = weight_papers_sample * (n_total / n_samples)
+    else:
+        embeddings_query_sample = embeddings_query
+        embeddings_key_sample = embeddings_key
+        weight_papers_sample = weight_papers
+        n_samples = n_total
 
     # Compute in batches to avoid memory issues
     manifold = geoopt.Lorentz()
-    all_points_query = embeddings_query.unsqueeze(0)  # Shape: [1, n, dim]
-    all_points_key = embeddings_key.unsqueeze(0)  # Shape: [1, n, dim]
-    for i in tqdm(range(0, n, batch_size)):
-        batch_end = min(i + batch_size, n)
-        # Get batch of points and all points
-        batch_points = focal_points_on_lorentz_manifold[i:batch_end, :].unsqueeze(
-            1
-        )  # Shape: [batch, 1, dim]
+    batch_size = 100  # Process grid points in small batches
 
-        # Compute hyperbolic distance using arcosh
-        distances_query = manifold.dist2(batch_points, all_points_query).squeeze()
-        distances_key = manifold.dist2(batch_points, all_points_key).squeeze()
+    # Process grid points in batches
+    for i in tqdm(range(0, n_grid, batch_size), desc="Processing grid points"):
+        batch_end = min(i + batch_size, n_grid)
+        batch_points = focal_points_on_lorentz_manifold[i:batch_end, :].unsqueeze(1)
 
-        # Replace NaN values with large distances that will result in near-zero kernel values
+        # Compute distances for sampled points
+        distances_query = manifold.dist2(batch_points, embeddings_query_sample.unsqueeze(0)).squeeze()
+        distances_key = manifold.dist2(batch_points, embeddings_key_sample.unsqueeze(0)).squeeze()
+
+        # Replace NaN values
         distances_query = torch.where(
-            torch.isnan(distances_query), torch.tensor(1e10), distances_query
+            torch.isnan(distances_query), torch.tensor(1e10, dtype=torch.float32), distances_query
         )
         distances_key = torch.where(
-            torch.isnan(distances_key), torch.tensor(1e10), distances_key
+            torch.isnan(distances_key), torch.tensor(1e10, dtype=torch.float32), distances_key
         )
 
-        # Compute kernel values using the hyperbolic distances
+        # Compute kernel values
         kernel_values_query = torch.exp(-distances_query / sigma)
         kernel_values_key = torch.exp(-distances_key / sigma)
 
         # Weight the kernel values and sum for density
-        weighted_kernel_query = kernel_values_query * weight_papers
-        weighted_kernel_key = kernel_values_key * weight_papers
+        densities[i:batch_end, 0] = torch.sum(kernel_values_query * weight_papers_sample, dim=1)
+        densities[i:batch_end, 1] = torch.sum(kernel_values_key * weight_papers_sample, dim=1)
 
-        densities[i:batch_end, 0] = torch.sum(weighted_kernel_query, dim=1)
-        densities[i:batch_end, 1] = torch.sum(weighted_kernel_key, dim=1)
+        # Clear unnecessary tensors
+        del distances_query, distances_key, kernel_values_query, kernel_values_key
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     return focal_points_on_poincare_disk, densities
 
@@ -168,40 +195,60 @@ focal_points_on_poincare_disk, densities = compute_density_grid(embeddings_query
 # %% Count the number of authors who travel between different focal points on the Poincaré disk
 
 def get_paper_sequences(
-    author2paper: sparse.csr_matrix, paper_years: np.ndarray, n_epochs: int
+    author2paper: sparse.csr_matrix,
+    paper_years: np.ndarray,
+    n_authors_sample: int = 100000
 ):
-    """Get chronologically ordered paper sequences for each author."""
+    """Get chronologically ordered paper sequences for sampled authors.
+
+    Args:
+        author2paper: Sparse matrix mapping authors to papers
+        paper_years: Array of paper years
+        n_authors_sample: Number of authors to sample
+
+    Returns:
+        Tuple containing:
+        - sequences: List of paper sequences
+        - weights: List of weights for each sequence
+    """
     sequences = []
     weights = []
-    for epoch in tqdm(range(n_epochs)):
-        for author_id in range(author2paper.shape[0]):
-            # Get papers for this author
-            papers = author2paper.indices[
-                author2paper.indptr[author_id] : author2paper.indptr[author_id + 1]
-            ]
 
-            if len(papers) > 1:
-                # Sort papers by year
-                paper_data = [(pid, paper_years[pid]) for pid in papers]
+    # Sample authors who have published more than one paper
+    author_paper_counts = np.diff(author2paper.indptr)
+    eligible_authors = np.where(author_paper_counts > 1)[0]
 
-                # Group papers by year
-                year_groups = {}
-                for pid, year in paper_data:
-                    if year not in year_groups:
-                        year_groups[year] = []
-                    year_groups[year].append(pid)
+    if len(eligible_authors) > n_authors_sample:
+        sampled_authors = np.random.choice(eligible_authors, size=n_authors_sample, replace=False)
+    else:
+        sampled_authors = eligible_authors
 
-                # Create sequence with one random paper per year
-                sequence = []
-                for year in sorted(year_groups.keys()):
-                    sequence.append(np.random.choice(year_groups[year]))
+    # Process sampled authors
+    for author_id in tqdm(sampled_authors, desc="Processing authors"):
+        # Get papers for this author
+        start_idx = author2paper.indptr[author_id]
+        end_idx = author2paper.indptr[author_id + 1]
+        papers = author2paper.indices[start_idx:end_idx]
 
-                sequences.append(sequence)
-                weights.append(1.0)
+        # Create year-paper dictionary
+        year_papers = {}
+        for pid in papers:
+            year = paper_years[pid]
+            if year not in year_papers:
+                year_papers[year] = []
+            year_papers[year].append(pid)
+
+        # Create sequence with one random paper per year
+        years = sorted(year_papers.keys())
+        if len(years) > 1:  # Only include if there are papers from multiple years
+            sequence = [np.random.choice(year_papers[year]) for year in years]
+            sequences.append(sequence)
+            # Weight proportional to number of eligible authors
+            weights.append(len(eligible_authors) / len(sampled_authors))
 
     return sequences, weights
 
-sequences, weights = get_paper_sequences(author2paper, paper_table["year"].values, 10)
+sequences, weights = get_paper_sequences(author2paper, paper_table["year"].values)
 
 # %% Classify the papers into different focal points
 
@@ -250,29 +297,66 @@ flux = flux.dropna()
 #ax.set_yscale("log")
 
 # %%
-# Create hexbin plot of distance vs flux
-plt.hexbin(flux["distance"], np.log(flux["flux"]+1),
-           gridsize=30,
-           bins='log',  # Use logarithmic binning for the colors
-           cmap='YlOrRd')  # Yellow-Orange-Red colormap
-plt.colorbar(label='Count (log)')
-plt.xlabel('Distance between focal points')
-plt.ylabel('Flux (number of transitions)')
-#plt.yscale('log')  # Keep log scale on y-axis
-plt.title('Hexbin plot of Distance vs Flux between Focal Points')
+fig, ax = plt.subplots(1, 2, figsize=(10, 5))
 
+# Plot 1: Distance vs Flux
+hb1 = ax[0].hexbin(
+    flux["distance"],
+    np.log(flux["flux"]+1),
+    gridsize=30,
+    bins='log',  # Use logarithmic binning for the colors
+    cmap='YlOrRd'  # Yellow-Orange-Red colormap
+)
+plt.colorbar(hb1, ax=ax[0], label='Count (log)')
+ax[0].set_xlabel('Distance between focal points')
+ax[0].set_ylabel('Flux (number of transitions)')
+ax[0].set_title('Distance vs Flux between Focal Points')
+# Plot 2: Expected vs Observed Flux - Only showing flows above median
+# Filter data to only show flows above median
+median_flux = flux["flux"].min()
+high_flux = flux[flux["flux"] > median_flux]
 
-# %%
+eps = 1e-10
+hb2 = ax[1].hexbin(
+    np.log(high_flux["flux_exp"]+eps),
+    np.log(high_flux["flux"]+eps),
+    gridsize=50,
+    bins='log',  # Use logarithmic binning for the colors
+    cmap='YlOrRd'  # Yellow-Orange-Red colormap
+)
+plt.colorbar(hb2, ax=ax[1], label='Count (log)')
+ax[1].set_xlabel('Flux Expected (log)')
+ax[1].set_ylabel('Flux Observed (log)')
+ax[1].set_title('Expected vs Observed Flux (Above Median)')
 
-plt.hexbin(np.log(flux["flux_exp"]+1), np.log(flux["flux"]+1),
-           gridsize=50,
-           bins='log',  # Use logarithmic binning for the colors
-           cmap='YlOrRd')  # Yellow-Orange-Red colormap
-plt.colorbar(label='Count (log)')
-plt.xlabel('Flux Expected')
-plt.ylabel('Flux Observed')
-#plt.yscale('log')  # Keep log scale on y-axis
-plt.title('Hexbin plot of Flux Expected vs Flux Observed')
+import scipy
+# Add regression line to the second plot
+x = np.log(high_flux["flux_exp"]+eps)
+y = np.log(high_flux["flux"]+eps)
+mask = ~np.isnan(x) & ~np.isnan(y)
+x_clean = x[mask]
+y_clean = y[mask]
 
+# Calculate regression line
+slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(x_clean, y_clean)
+r_squared = r_value
+
+# Plot regression line
+x_line = np.linspace(x_clean.min(), x_clean.max(), 100)
+y_line = slope * x_line + intercept
+ax[1].plot(x_line, y_line, 'b-', linewidth=2)
+
+# Add R² text to the plot
+ax[1].text(0.05, 0.95, f'R² = {r_squared:.3f}',
+           transform=ax[1].transAxes,
+           fontsize=12, verticalalignment='top',
+           bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+ax[1].set_xlim(-20, -3)
+ax[1].set_ylim(0, 13)
+sns.despine(fig)
+# Adjust layout and save
+fig.tight_layout()
+#fig.savefig("flux-between-focal-points.png", dpi=300, bbox_inches='tight')
+#plt.close(fig)  # Close the figure to free memory
 
 # %%

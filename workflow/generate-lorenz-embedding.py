@@ -33,7 +33,7 @@ else:
         "embeddings"
     ]
     # model_file = "../data/derived/embeddings/model.pt"
-    model_file = "../checkpoints/lorentz-epoch=58-val_loss=-4.87.ckpt"
+    model_file = "../checkpoints/lorentz-epoch=42-val_loss=0.34.ckpt"
     output_file = "../data/derived/embeddings/embedding-checkpoint.npz"
 
 # Initialize model

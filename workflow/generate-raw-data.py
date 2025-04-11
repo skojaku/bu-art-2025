@@ -3,22 +3,35 @@ from pathlib import Path
 import time
 from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
+from typing import List
+import pyarrow as pa
+import pyarrow.parquet as pq
+import polars as pl
+import polars.datatypes as pl_types
 
 # Get institution ID from snakemake config
-INSTITUTION_ID = snakemake.config["institution_id"]
+INSTITUTION_IDS = snakemake.params["institution_ids"]
+
+db_name = snakemake.config["db_name"]
+db_password = snakemake.config["db_password"]
+db_user = snakemake.config["db_user"]
+db_port = snakemake.config["db_port"]
 
 # Database connection parameters
 db_params = {
-    'dbname': 'openalex',
-    'user': 'skojaku',
-    'password': 'xxx',
+    'dbname': db_name,
+    'user': db_user,
+    'password': db_password,
     'host': 'localhost',
-    'port': '5432'
+    'port': db_port
 }
 
 engine = create_engine(
     f"postgresql://{db_params['user']}:{quote_plus(db_params['password'])}@{db_params['host']}:{db_params['port']}/{db_params['dbname']}"
 )
+
+# Format institution IDs for SQL query
+institution_ids_str = "', '".join(INSTITUTION_IDS)
 
 SETUP_QUERIES = [
     f"""
@@ -28,7 +41,7 @@ SETUP_QUERIES = [
     FROM (
         SELECT author_id as openalex_author_id
         FROM openalex.works_authorships
-        WHERE institution_id = '{INSTITUTION_ID}'
+        WHERE institution_id IN ('{institution_ids_str}')
     ) AS authors;
 
     CREATE INDEX ON affiliated_authors(openalex_author_id);
@@ -60,6 +73,13 @@ SETUP_QUERIES = [
 
     CREATE INDEX ON paper_mapping(openalex_paper_id);
     CREATE INDEX ON paper_mapping(paper_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS temp_works_authorships_work_id_idx
+    ON openalex.works_authorships(work_id);
+
+    CREATE INDEX IF NOT EXISTS temp_works_authorships_author_id_idx
+    ON openalex.works_authorships(author_id);
     """
 ]
 
@@ -87,16 +107,25 @@ QUERIES = {
     """,
 
     'author_paper_table': """
+    WITH base_data AS (
+        SELECT
+            wa.work_id,
+            wa.author_id,
+            wa.raw_affiliation_string,
+            pm.paper_id,
+            am.author_id as mapped_author_id
+        FROM openalex.works_authorships wa
+        INNER JOIN paper_mapping pm ON wa.work_id = pm.openalex_paper_id
+        INNER JOIN author_mapping am ON wa.author_id = am.openalex_author_id
+    )
     SELECT
-        ROW_NUMBER() OVER (ORDER BY wa.work_id, wa.author_id) - 1 as author_paper_id,
-        pm.paper_id,
-        am.author_id,
-        string_agg(DISTINCT wa.raw_affiliation_string, ';') as affiliations
-    FROM openalex.works_authorships wa
-    INNER JOIN paper_mapping pm ON wa.work_id = pm.openalex_paper_id
-    INNER JOIN author_mapping am ON wa.author_id = am.openalex_author_id
-    GROUP BY wa.work_id, wa.author_id, pm.paper_id, am.author_id
-    ORDER BY pm.paper_id, am.author_id;
+        ROW_NUMBER() OVER (ORDER BY work_id, author_id) - 1 as author_paper_id,
+        paper_id,
+        mapped_author_id as author_id,
+        string_agg(DISTINCT raw_affiliation_string, ';') as affiliations
+    FROM base_data
+    GROUP BY work_id, author_id, paper_id, mapped_author_id
+    ORDER BY paper_id, mapped_author_id;
     """,
 
     'paper_concept_table': """
@@ -107,7 +136,37 @@ QUERIES = {
     FROM openalex.works_concepts wc
     INNER JOIN paper_mapping pm ON wc.work_id = pm.openalex_paper_id
     ORDER BY pm.paper_id, wc.score DESC;
+    """,
+    
+    'concept_table': """
+    SELECT * FROM openalex.concepts
     """
+}
+
+TABLE_SCHEMAS = {
+    'author_table': {
+        'author_id': pl.Int64,
+        'openalex_author_id': pl.Utf8,
+        'name': pl.Utf8,
+        'orcid': pl.Utf8
+    },
+    'paper_table': {
+        'paper_id': pl.Int64,
+        'openalex_paper_id': pl.Utf8,
+        'title': pl.Utf8,
+        'year': pl.Int64
+    },
+    'author_paper_table': {
+        'author_paper_id': pl.Int64,
+        'paper_id': pl.Int64,
+        'author_id': pl.Int64,
+        'affiliations': pl.Utf8
+    },
+    'paper_concept_table': {
+        'paper_id': pl.Int64,
+        'concept_id': pl.Utf8,
+        'score': pl.Float64
+    }
 }
 
 def validate_data(engine):
@@ -116,15 +175,14 @@ def validate_data(engine):
         check_query = f"""
         SELECT COUNT(*) as count
         FROM openalex.works_authorships
-        WHERE institution_id = '{INSTITUTION_ID}';
+        WHERE institution_id IN ('{institution_ids_str}');
         """
-        with engine.connect() as conn:
-            result = pd.read_sql_query(check_query, conn)
-            count = result['count'].iloc[0]
-            if count == 0:
-                print("No authors found for the specified institution!")
-                return False
-            print(f"Found {count:,} author-paper relationships for the institution")
+        df = pl.read_database(query=check_query, connection=engine)
+        count = df[0, 0]  # Get first row, first column
+        if count == 0:
+            print("No authors found for the specified institutions!")
+            return False
+        print(f"Found {count:,} author-paper relationships for the institutions")
         return True
     except Exception as e:
         print(f"Validation failed: {e}")
@@ -144,35 +202,57 @@ def setup_temp_tables(engine):
         raise
 
 def export_to_csv(table_name, query, engine, output_file):
-    """Execute query and export results to CSV with timing and stats"""
+    """Execute query and export results with timing and stats"""
     print(f"\nExporting {table_name}...")
     start_time = time.time()
     try:
-        # Execute query and load into DataFrame
-        df = pd.read_sql_query(query, engine)
+        # Get schema for this table
+        schema = TABLE_SCHEMAS.get(table_name)
+
+        # Execute query and load into Polars DataFrame with explicit schema
+        df = pl.read_database(
+            query=query,
+            connection=engine,
+            schema_overrides=schema
+        )
 
         # Export to CSV
-        df.to_csv(output_file, index=False)
+        df.write_csv(output_file)
 
         # Calculate statistics
         duration = time.time() - start_time
         size_mb = Path(output_file).stat().st_size / (1024 * 1024)
 
         # Print results
-        print(f"✓ Successfully exported {len(df):,} rows")
+        print(f"✓ Successfully exported {df.height:,} rows")
         print(f"  File size: {size_mb:.2f}MB")
         print(f"  Duration: {duration:.2f} seconds")
 
-        # Check for null values
-        null_counts = df.isna().sum()
-        if null_counts.any():
-            print("\n  Null value counts:")
-            for col, count in null_counts[null_counts > 0].items():
-                print(f"    - {col}: {count:,} nulls")
+        return df.height
 
-        return df
     except Exception as e:
         print(f"Error exporting {table_name}: {e}")
+        raise
+
+def get_northeast_institutions(engine):
+    """Retrieve institutions in the Northeast region using precise state boundary checks"""
+    try:
+        with engine.connect() as conn:
+            # First, ensure PostGIS extension is available
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis;"))
+            conn.commit()
+
+            # Execute the query using Polars
+            df = pl.read_database(query=query, connection=engine)
+            print(f"Found {df.height:,} institutions in the Northeast region")
+
+            # Show distribution by state
+            print("\nInstitutions by state:")
+            print(df.group_by('state').agg(pl.count()).sort('count', descending=True))
+
+            return df
+    except Exception as e:
+        print(f"Error retrieving institutions: {e}")
         raise
 
 # Map output files to table names
@@ -203,18 +283,6 @@ try:
             except Exception as e:
                 print(f"Failed to export {table_name}: {e}")
                 raise
-
-    # Print summary
-    print("\nExport Summary:")
-    print("-" * 50)
-    total_rows = sum(len(df) for df in results.values())
-    total_size = sum(
-        Path(file).stat().st_size / (1024 * 1024)
-        for file in output_files.values()
-    )
-    print(f"Total rows exported: {total_rows:,}")
-    print(f"Total file size: {total_size:.2f}MB")
-    print("\nExport completed successfully!")
 
 except Exception as e:
     print(f"\nError during export process: {e}")

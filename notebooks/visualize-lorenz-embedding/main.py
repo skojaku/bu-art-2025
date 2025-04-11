@@ -12,7 +12,7 @@ from scipy import sparse
 paper_table = pd.read_csv("../../data/preprocessed/paper_table.csv")
 paper_concept_table = pd.read_csv("../../data/preprocessed/paper_concept_table.csv")
 concept_table = pd.read_csv("../../data/preprocessed/concept_table.csv")
-data = np.load("../../data/derived/embeddings/embeddings-2025-0220.npz")
+data = np.load("../../data/derived/embeddings/embedding-checkpoint.npz")
 #data = np.load("../../data/derived/embeddings/embeddings.npz")
 paper_author_table = pd.read_csv("../../data/preprocessed/author_paper_table.csv")
 concept_table = pd.read_csv("../../data/preprocessed/concept_table.csv")
@@ -84,7 +84,7 @@ def compute_density_grid(
     grid_size=40,
     r=1.2,
     sigma=1.0,
-    batch_size=1000,
+    batch_size=100,  # Reduced batch size
 ):
     """Compute density values on a grid in the Poincaré disk.
 
@@ -116,43 +116,54 @@ def compute_density_grid(
         focal_points_on_poincare_disk
     )
 
-    # Compute densities
+    # Initialize tensors for storing results
     n = len(focal_points_on_lorentz_manifold)
     densities = torch.zeros(n, 2, dtype=torch.float64)
 
-    # Compute in batches to avoid memory issues
+    # Process embeddings in chunks to reduce memory usage
     manifold = geoopt.Lorentz()
-    all_points_query = embeddings_query.unsqueeze(0)  # Shape: [1, n, dim]
-    all_points_key = embeddings_key.unsqueeze(0)  # Shape: [1, n, dim]
+    chunk_size = 1000  # Process 1000 embeddings at a time
+
     for i in tqdm(range(0, n, batch_size)):
         batch_end = min(i + batch_size, n)
-        # Get batch of points and all points
-        batch_points = focal_points_on_lorentz_manifold[i:batch_end, :].unsqueeze(
-            1
-        )  # Shape: [batch, 1, dim]
+        batch_points = focal_points_on_lorentz_manifold[i:batch_end, :].unsqueeze(1)
 
-        # Compute hyperbolic distance using arcosh
-        distances_query = manifold.dist2(batch_points, all_points_query).squeeze()
-        distances_key = manifold.dist2(batch_points, all_points_key).squeeze()
+        # Initialize batch results
+        batch_densities_query = torch.zeros(batch_end - i, dtype=torch.float64)
+        batch_densities_key = torch.zeros(batch_end - i, dtype=torch.float64)
 
-        # Replace NaN values with large distances that will result in near-zero kernel values
-        distances_query = torch.where(
-            torch.isnan(distances_query), torch.tensor(1e10), distances_query
-        )
-        distances_key = torch.where(
-            torch.isnan(distances_key), torch.tensor(1e10), distances_key
-        )
+        # Process embeddings in chunks
+        for j in range(0, len(embeddings_query), chunk_size):
+            chunk_end = min(j + chunk_size, len(embeddings_query))
 
-        # Compute kernel values using the hyperbolic distances
-        kernel_values_query = torch.exp(-distances_query / sigma)
-        kernel_values_key = torch.exp(-distances_key / sigma)
+            # Get current chunk of embeddings
+            chunk_query = embeddings_query[j:chunk_end].unsqueeze(0)
+            chunk_key = embeddings_key[j:chunk_end].unsqueeze(0)
+            chunk_weights = weight_papers[j:chunk_end]
 
-        # Weight the kernel values and sum for density
-        weighted_kernel_query = kernel_values_query * weight_papers
-        weighted_kernel_key = kernel_values_key * weight_papers
+            # Compute distances for current chunk
+            distances_query = manifold.dist2(batch_points, chunk_query).squeeze()
+            distances_key = manifold.dist2(batch_points, chunk_key).squeeze()
 
-        densities[i:batch_end, 0] = torch.sum(weighted_kernel_query, dim=1)
-        densities[i:batch_end, 1] = torch.sum(weighted_kernel_key, dim=1)
+            # Replace NaN values
+            distances_query = torch.where(
+                torch.isnan(distances_query), torch.tensor(1e10, dtype=torch.float64), distances_query
+            )
+            distances_key = torch.where(
+                torch.isnan(distances_key), torch.tensor(1e10, dtype=torch.float64), distances_key
+            )
+
+            # Compute kernel values
+            kernel_values_query = torch.exp(-distances_query / sigma)
+            kernel_values_key = torch.exp(-distances_key / sigma)
+
+            # Weight and accumulate
+            batch_densities_query += torch.sum(kernel_values_query * chunk_weights, dim=1)
+            batch_densities_key += torch.sum(kernel_values_key * chunk_weights, dim=1)
+
+        # Store results for this batch
+        densities[i:batch_end, 0] = batch_densities_query
+        densities[i:batch_end, 1] = batch_densities_key
 
     return focal_points_on_poincare_disk, densities
 

@@ -1,5 +1,8 @@
 # Art Competition 2025 at Binghamton University
 
+⭐⭐ This artwork was selected as a finalist in the competition as the "Judges Choice" section (14 out of 85 entries) ⭐⭐!
+
+
 ![](./figs/bu-art-2025-image.png)
 
 This is a repository for art "Gravity of Ideas: Mapping Science at BU" submitted to the Binghamton University Art Competition 2025.
